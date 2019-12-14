@@ -146,6 +146,50 @@ def rule(r):
     print(r)
 
 
+class RefEnv:
+  zeroStr = Str("")
+  zeroStr.line = 0
+  zeroStr.col = 0
+
+  def __init__(self, prev = None):
+    self.prev = prev
+    self.map = dict()
+
+  def getStr(self, s):
+    if isinstance(s, Str):
+      return s
+    if isinstance(s, str):
+      return reStr(s, RefEnv.zeroStr)
+    elif isinstance(s, SymbolExpr):
+      return s.sym
+    else:
+      return reStr(str(s), RefEnv.zeroStr)
+
+  def lookup(self, id):
+    id = self.getStr(id)
+    if id in self.map:
+      return self.map[id]
+    elif self.prev != None:
+      return self.prev.lookup(id)
+    else:
+      raise EvalError("Cannot find: " + str(id), id.line, id.col)
+
+  def update(self, id, val):
+    id = self.getStr(id)
+    if id in self.map:
+      self.map[id] = val
+    elif self.prev != None:
+      self.prev.update(id, val)
+    else:
+      raise EvalError("Cannot find: " + str(id), id.line, id.col)
+
+  def define(self, id, val):
+    id = self.getStr(id)
+    if id in self.map:
+      raise EvalError("Duplicate symbol defined: " + id, id.line, id.col)
+    self.map[id] = val
+
+
 OpFunc = namedtuple('OpFunc', ['typ', 'op'])
 OpTypInt = type(1)
 OpTypBool = type(True)
@@ -199,7 +243,83 @@ class EList:
         v = e.eval(env)
       return v
 
-   
+
+class DefExpr:
+  def __init__(self):
+    rule("DEF -> 'def' SYMBOL '=' EXPR");
+    next_token()
+    self.sym = SymbolExpr()
+    tok = next_token()
+    if tok != '=':
+      raise ParseError("Expecting '=' after symbol", tok)
+    self.expr = parseExpr()
+
+  def eval(self, env):
+    val = self.expr.eval(env)
+    env.define(self.sym, val)
+    return val
+
+
+class AssignExpr:
+  def __init__(self, is_expr):
+    if is_expr:
+      rule("ASSIGN -> 'set' SYMBOL '=' EXPR");
+      next_token()
+
+    self.sym = SymbolExpr()
+    tok = next_token()
+    if tok != '=':
+      raise ParseError("Expecting '=' after symbol", tok)
+
+    self.expr = parseExpr()
+
+  def eval(self, env, add_env = None):
+    val = self.expr.eval(env)
+    if add_env != None:
+      result = val
+      add_env.define(self.sym, val)
+    else:
+      result = env.lookup(self.sym)
+      env.update(self.sym, val)
+    return result
+
+
+class LetExpr:
+  def __init__(self):
+    self.rec = next_token() == 'letrec'
+    if self.rec:
+      rule("LET -> 'letrec' V_LIST BODY")
+    else:
+      rule("LET -> 'let' V_LIST BODY")
+
+    self.vars = []
+    self.parseVList()
+    self.body = parseBody()
+  
+  def parseVList(self):
+    rule("V_LIST -> SYM '=' EXPR V_TAIL")
+    self.vars.append(AssignExpr(False))
+    self.parseVTail()
+
+  def parseVTail(self):
+    if lookahead() == ',':
+      rule("V_TAIL -> ',' V_LIST")
+      next_token()
+      self.parseVList()
+    else:
+      rule("V_TAIL -> epsilon")
+
+  def eval(self, env):
+    let_env = RefEnv(env)
+    if self.rec:
+      env = let_env
+
+    for v in self.vars:
+      v.eval(env, let_env)
+
+    return self.body.eval(let_env)
+
+
 OpLevel = namedtuple('OpLevel', ['expr', 'head', 'tail', 'ops', 'next' ])
 
 fact_lvl = OpLevel("FACT", "VALUE", "F_TAIL", { '*', '/' }, None)
@@ -340,7 +460,7 @@ class SymbolExpr:
       raise ParseError("Invalid symbol name", self.sym)
 
   def eval(self, env):
-    return self.sym
+    return env.lookup(self.sym)
 
 
 def parseS():
@@ -360,9 +480,17 @@ def parseExpr():
  
   if tok in bad_expr:
     raise ParseError("Invalid expression", tok)
-  else:
+  elif tok == 'def':
+    rule("EXPR -> DEF");
+    return DefExpr()
+  elif tok == 'let':
+    rule("EXPR -> LET");
+    return LetExpr()
+  elif tok in ok_sexpr or tok not in reserved: 
     rule("EXPR -> S_EXPR");
     return SimpleExpr().pack()
+  else:
+    raise ParseError("Invalid expression", tok)
 
 
 def parseBody():
@@ -391,6 +519,7 @@ def parseValue():
     tok = next_token() 
     if tok != ')':
       raise ParseError("Expecting ')' after expression", tok)
+
     return e
   elif tok == '[':
     rule("VALUE -> LIST")
@@ -430,13 +559,15 @@ def correct(v):
     return str(v)
 
 
+top_ref = RefEnv()
+
 try:
   l = parseS()
   tok = lookahead()
   if tok != "":
     raise ParseError("Extraneous input", tok)
   if l != None:
-    for a in l.eval(None, True):
+    for a in l.eval(top_ref, True):
       print(correct(a))
 except ScanError as p:
   if verbose:
