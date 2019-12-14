@@ -207,6 +207,16 @@ operators = { '+' : OpFunc(None, lambda a, b : a + b),
               }
 
 
+class Lambda:
+  def __init__(self, ref, params, exprs):
+    self.ref = ref
+    self.params = copy.deepcopy(params)
+    self.exprs = copy.deepcopy(exprs)
+
+  def __str__(self):
+    return "<lambda>"
+
+
 class EList:
   def __init__(self):
     self.list = []
@@ -282,6 +292,46 @@ class AssignExpr:
       result = env.lookup(self.sym)
       env.update(self.sym, val)
     return result
+
+
+class LambdaExpr:
+  def __init__(self):
+    rule("LAMBDA -> 'lambda' '(' PARAMS ')' BODY")
+    next_token()
+
+    tok = next_token()
+    if tok != '(':
+      raise ParseError("Expecting '('", tok)
+    self.params = []
+    self.parseParams()
+    tok = next_token()
+    if tok != ')':
+      raise ParseError("Expecting ')'", tok)
+
+    self.body = parseBody()
+
+  def parseParams(self):
+    tok = lookahead()
+    if tok == ')':
+      rule("PARAMS -> epsilon")
+    else:
+      self.params.append(SymbolExpr())
+      self.parsePList()
+
+  def parsePList(self):
+    tok = lookahead()
+    if tok == ')':
+      rule("P_LIST -> epsilon")
+    elif tok == ',':
+      rule("P_LIST -> ',' SYMBOL P_LIST")
+      next_token()
+      self.params.append(SymbolExpr())
+      self.parsePList()
+    else:
+      raise ParseError("Expecting ',' or ')'", tok)
+
+  def eval(self, env):
+    return Lambda(env, self.params, self.body)
 
 
 class LetExpr:
@@ -414,6 +464,60 @@ class ListExpr:
   def eval(self, env):
     return [ a.eval(env) for a in self.args ]
 
+class CallExpr:
+  def __init__(self, expr):
+    self.loc =  expr
+    self.args = []
+
+    self.tok = next_token()
+    if self.tok != '(':
+      raise ParseError("Expecting '(' in call", self.tok)
+   
+    self.parseArgs()
+    next_token()          # closing ')' token
+    
+
+  def parseArgs(self):
+    if lookahead() == ')':  
+      rule("ARGS -> epsilon")
+    else:
+      rule("ARGS -> EXPR A_LIST")
+      self.args.append(parseExpr())
+      self.parseAList()
+       
+  def parseAList(self):
+    tok = lookahead()
+    if tok == ')':  
+      rule("A_LIST -> epsilon")
+    elif tok == ',':
+      rule("A_LIST -> ',' EXPR A_LIST")
+      next_token()
+      self.args.append(parseExpr())
+      self.parseAList()
+    else:
+      raise ParseError("Expecting ',' or ')' after argument", tok)
+       
+  def eval(self, env):
+    loc = self.loc.eval(env)
+    if isinstance(loc, types.LambdaType):
+      if len(self.args) != loc.__code__.co_argcount:
+        raise EvalError("Incorrect number of arguments", self.tok.line,
+                         self.tok.col)
+      args = []
+      for a in self.args:
+        args.append(a.eval(env))
+      return loc(*args)
+    elif isinstance(loc, Lambda):
+      call_env = RefEnv(loc.ref)
+      args = iter(self.args)
+      for p in loc.params:
+        call_env.define(p, next(args).eval(env))
+
+      return loc.exprs.eval(call_env)
+    else:
+      raise EvalError("Cannot call a non-lambda expression", self.tok.line,
+                        self.tok.col)
+    
 
 class UnaryExpr:
   def __init__(self):
@@ -483,6 +587,12 @@ def parseExpr():
   elif tok == 'def':
     rule("EXPR -> DEF");
     return DefExpr()
+  elif tok == 'set':
+    rule("EXPR -> ASSIGN");
+    return AssignExpr(True)
+  elif tok == 'lambda':
+    rule("EXPR -> LAMBDA");
+    return LambdaExpr()
   elif tok == 'let':
     rule("EXPR -> LET");
     return LetExpr()
@@ -508,19 +618,28 @@ def parseBody():
   return l
 
 
+def parseCall(expr):
+    while lookahead() == '(':
+      rule("CALL -> '(' ARGS ')' CALL")
+      expr = CallExpr(expr)
+    
+    rule("CALL -> epsilon")
+    return expr
+
+
 def parseValue():
   tok = lookahead()
   if tok == "":
     raise ParseError("Unexpected end of program", tok)
   elif tok == "(":
-    rule("VALUE -> '(' EXPR ')'")
+    rule("VALUE -> '(' EXPR ')' CALL")
     next_token()
     e = parseExpr()
     tok = next_token() 
     if tok != ')':
       raise ParseError("Expecting ')' after expression", tok)
 
-    return e
+    return parseCall(e)
   elif tok == '[':
     rule("VALUE -> LIST")
     return ListExpr()
@@ -532,7 +651,7 @@ def parseValue():
     return LiteralExpr()
   elif tok.isidentifier():                           # identifier
     rule("VALUE -> SYMBOL")
-    return SymbolExpr()
+    return parseCall(SymbolExpr())
   else:                                              # error
     raise ParseError("Unexpected token ", tok)
 
@@ -559,7 +678,16 @@ def correct(v):
     return str(v)
 
 
+def print_arg(arg):
+  print(arg)
+  return arg
+
+
 top_ref = RefEnv()
+top_ref.define('head', lambda lst : lst[0])
+top_ref.define('tail', lambda lst : lst[1:])
+top_ref.define('prepend', lambda head, tail : [head] + tail)
+top_ref.define('print', print_arg)
 
 try:
   l = parseS()
