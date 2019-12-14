@@ -40,6 +40,16 @@ class ParseError(Exception):
     return repr(self.value)
 
 
+class EvalError(Exception):
+  def __init__(self, value, line, col):
+    self.value = value
+    self.line = line
+    self.col = col
+
+  def __str__(self):
+    return repr(self.value)
+
+
 def reStr(s, t):
   r = Str(s)
   r.line = t.line
@@ -136,6 +146,23 @@ def rule(r):
     print(r)
 
 
+OpFunc = namedtuple('OpFunc', ['typ', 'op'])
+OpTypInt = type(1)
+OpTypBool = type(True)
+operators = { '+' : OpFunc(None, lambda a, b : a + b),
+              '-' : OpFunc(OpTypInt, lambda a, b : a - b),
+              '*' : OpFunc(OpTypInt, lambda a, b : a * b),
+              '/' : OpFunc(OpTypInt, lambda a, b : a // b),
+              '&' : OpFunc(OpTypBool, lambda a, b : a & b),
+              '|' : OpFunc(OpTypBool, lambda a, b : a | b),
+              '!' : OpFunc(OpTypBool, lambda a, b : not b),
+              '<' : OpFunc(None, lambda a, b : a < b),
+              '>' : OpFunc(None, lambda a, b : a > b),
+              '=' : OpFunc(None, lambda a, b : a == b),
+              '#' : OpFunc(None, lambda a, b : a != b)
+              }
+
+
 class EList:
   def __init__(self):
     self.list = []
@@ -159,6 +186,18 @@ class EList:
   
     rule("E_TAIL -> E_LIST");
     self.parse()
+
+  def eval(self, env, toplevel = False):
+    if toplevel:
+      v = []
+      for e in self.list:
+        v.append(e.eval(env))
+      return v
+    else:
+      v = None
+      for e in self.list:
+        v = e.eval(env)
+      return v
 
    
 OpLevel = namedtuple('OpLevel', ['expr', 'head', 'tail', 'ops', 'next' ])
@@ -192,6 +231,35 @@ class SimpleExpr:
     else:
       rule(op_lvl.tail + " -> epsilon")
 
+  def pack(self):
+    if len(self.atoms) == 1 :
+      if isinstance(self.atoms[0], SimpleExpr):
+        return self.atoms[0].pack()
+      else:
+        return self.atoms[0]
+    else:
+      return self
+
+  def eval(self, env):
+    atoms = iter(self.atoms)
+    acc = next(atoms).eval(env)
+
+    while True:
+      try:
+        op = next(atoms)
+        val = next(atoms).eval(env)
+      except StopIteration:
+        return acc
+
+      func = operators[op]
+      if type(acc) != type(val):
+        raise EvalError("Operand type " + str(type(acc)) + " != " +\
+                         str(type(val)), op.line, op.col)
+      elif func.typ != None and type(acc) != func.typ:
+        raise EvalError("Operand types are not correct", op.line, op.col)
+      
+      acc = func.op(acc, val)
+
 
 class ListExpr:
   def __init__(self):
@@ -222,6 +290,9 @@ class ListExpr:
       self.parseAList()
     else:
       raise ParseError("Expecting ',' or ']' after list item", tok)
+       
+  def eval(self, env):
+    return [ a.eval(env) for a in self.args ]
 
 
 class UnaryExpr:
@@ -229,6 +300,13 @@ class UnaryExpr:
     self.op = next_token()
     rule("UNARY -> '" + self.op + "' VALUE")
     self.expr = parseValue()
+  
+  def eval(self, env):
+    acc = self.expr.eval(env)
+    func = operators[self.op]
+    if func.typ != None and type(acc) != func.typ:
+      raise EvalError("Operand types are incorrect", self.op.line, self.op.col)
+    return func.op(0, acc)
 
 
 class LiteralExpr:
@@ -249,6 +327,9 @@ class LiteralExpr:
     elif tok == 'nil':
       rule("LITERAL -> 'nil'")
       self.val = None
+  
+  def eval(self, env):
+    return self.val
 
 
 class SymbolExpr:
@@ -257,6 +338,9 @@ class SymbolExpr:
     rule("SYMBOL -> symbol(" + self.sym + ")")
     if self.sym in reserved or self.sym.isdigit():
       raise ParseError("Invalid symbol name", self.sym)
+
+  def eval(self, env):
+    return self.sym
 
 
 def parseS():
@@ -278,7 +362,7 @@ def parseExpr():
     raise ParseError("Invalid expression", tok)
   else:
     rule("EXPR -> S_EXPR");
-    return SimpleExpr()
+    return SimpleExpr().pack()
 
 
 def parseBody():
@@ -323,12 +407,37 @@ def parseValue():
   else:                                              # error
     raise ParseError("Unexpected token ", tok)
 
+
+def correct(v):
+  if isinstance(v, list):
+    s = "["
+    for i in v:
+      if len(s) > 1:
+        s += ", "
+      s += correct(i)
+    s += "]"
+    return s
+  elif isinstance(v, str):
+    return '"' + v + '"'
+  elif isinstance(v, bool):
+    if v:
+      return 'true'
+    else:
+      return 'false'
+  elif v == None:
+    return 'nil'
+  else:
+    return str(v)
+
+
 try:
-  print_rules = True
   l = parseS()
   tok = lookahead()
   if tok != "":
     raise ParseError("Extraneous input", tok)
+  if l != None:
+    for a in l.eval(None, True):
+      print(correct(a))
 except ScanError as p:
   if verbose:
     print("{} at line {} col {} : {}".format(p.msg,p.tok.line,p.tok.col,p.tok))
@@ -338,3 +447,6 @@ except ParseError as p:
           str(p.tok.col) + " : " + str(p))
   else:
     print("Syntax Error")
+except EvalError as p:
+  print("Evaluation Error while evaluating " + str(p) + " on line " +\
+        str(p.line) + ", column " + str(p.col))
