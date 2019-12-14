@@ -370,6 +370,50 @@ class LetExpr:
     return self.body.eval(let_env)
 
 
+class IfExpr:
+  def __init__(self):
+    self.cond = None
+    self.next = None
+
+    tok = next_token()
+    if tok == 'if':
+      rule("IF -> 'if' EXPR BODY ELIF ELSE" )
+      self.tok = lookahead()
+      self.cond = parseExpr()
+    elif tok == 'elseif':
+      rule("ELIF -> 'elseif' EXPR BODY ELIF" )
+      self.tok = lookahead()
+      self.cond = parseExpr()
+    elif tok == 'else':
+      rule("ELSE -> 'ELSE' BODY" )
+
+    self.body = parseBody()
+
+    tok = lookahead()
+    if self.cond != None:
+      if tok == 'elseif':
+        self.next = IfExpr()
+      else:
+        rule("ELIF -> epsilon" )
+        if lookahead() == 'else':
+          self.next = IfExpr()
+        else:
+          rule("ELSE -> epsilon" )
+
+  def eval(self, env):
+    cond = True
+    if self.cond != None:
+      cond = self.cond.eval(env)
+      if type(cond) != OpTypBool:
+        raise EvalError("Condition not boolean", self.tok.line, self.tok.col)
+  
+    if cond:
+      return self.body.eval(env)
+    elif self.next != None:
+      return self.next.eval(env)
+    else:
+      return False
+
 OpLevel = namedtuple('OpLevel', ['expr', 'head', 'tail', 'ops', 'next' ])
 
 fact_lvl = OpLevel("FACT", "VALUE", "F_TAIL", { '*', '/' }, None)
@@ -596,6 +640,9 @@ def parseExpr():
   elif tok == 'let':
     rule("EXPR -> LET");
     return LetExpr()
+  elif tok == 'if':
+    rule( "EXPR -> IF" );
+    return IfExpr()
   elif tok in ok_sexpr or tok not in reserved: 
     rule("EXPR -> S_EXPR");
     return SimpleExpr().pack()
