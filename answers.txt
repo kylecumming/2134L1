@@ -4,18 +4,27 @@ Banner #:
 Name of Partner (if permitted): 
 Banner # of Partner (if permitted):
 
-Place your answers to the questions from lab 1 here.
+Place your answers to the questions from lab 1 here:
 
-Q1:
+a. How many versions of splat.py have been committed on this branch?
 
-A1:
-
-
-Q2:
-
-A2:
+Answer: 
 
 
-Q3:
+b. For each of the commits, what was the commit comment?
 
-A3:
+Answer: 
+
+
+c. Which class was added to splat.py before the current version? 
+
+Answer: 
+
+
+d. How many lines of code was the first commit of incremental/splat.py (the scan-ner)?  
+
+Answer: 
+
+
+
+
