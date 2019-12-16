@@ -11,7 +11,7 @@ a. How many versions of splat.py have been committed on this branch?
 Answer: 
 
 
-b. For each of the commits, what was the commit comment?
+b. For each of the commits, what was the date and the commit comment?
 
 Answer: 
 
