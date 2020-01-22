@@ -4,6 +4,7 @@ from __future__ import print_function
 import splatlex
 import splatparse
 import splateval
+import splatref
 import sys 
 
 verbose = "-v" in sys.argv
